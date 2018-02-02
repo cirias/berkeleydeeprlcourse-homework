@@ -12,6 +12,10 @@ from multiprocessing import Process
 # Utilities
 #============================================================================================#
 
+def normalize(x, mean=0.0, std=1.0):
+    x = (x - np.mean(x)) / (np.std(x) + 1e-8)
+    return x * (std + 1e-8) + mean
+
 def build_mlp(
         input_placeholder, 
         output_size,
@@ -182,10 +186,12 @@ def train_PG(exp_name='',
 
     else:
         # YOUR_CODE_HERE
-        sy_mean = TODO
-        sy_logstd = TODO # logstd should just be a trainable variable, not a network output.
-        sy_sampled_ac = TODO
-        sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian. 
+        sy_mean_na = build_mlp(sy_ob_no, ac_dim, "nn_policy", n_layers=n_layers, size=size)
+        sy_logstd_1a = tf.Variable(tf.zeros([1, ac_dim]), dtype=tf.float32)
+        sy_sigma_1a = tf.exp(sy_logstd_1a)
+        sy_sampled_ac = sy_mean_na + sy_sigma_1a * tf.random_normal(tf.shape(sy_mean_na))
+        # TODO why below?
+        sy_logprob_n = 0.5 * tf.reduce_sum(tf.square((sy_ac_na - sy_mean_na)/sy_sigma_1a), axis=1)  # Hint: Use the log probability under a multivariate gaussian. 
 
 
 
@@ -358,8 +364,7 @@ def train_PG(exp_name='',
             # #bl2 below.)
 
             b_n = sess.run(sy_baseline_prediction_n, feed_dict={sy_ob_no: ob_no})
-            b_n = b_n - np.mean(b_n) + np.mean(q_n)
-            b_n = b_n / np.std(b_n) * np.std(q_n)
+            b_n = normalize(b_n, np.mean(q_n), np.std(q_n))
             adv_n = q_n - b_n
         else:
             adv_n = q_n.copy()
@@ -372,9 +377,7 @@ def train_PG(exp_name='',
         if normalize_advantages:
             # On the next line, implement a trick which is known empirically to reduce variance
             # in policy gradient methods: normalize adv_n to have mean zero and std=1. 
-            adv_n -= np.mean(adv_n)
-            adv_n /= np.std(adv_n)
-            pass
+            adv_n = normalize(adv_n)
 
 
         #====================================================================================#
@@ -398,7 +401,8 @@ def train_PG(exp_name='',
                     sy_baseline_prediction_n,
                     feed_dict={sy_ob_no: path["observation"][1:]})
                 v_next_n = np.append(v_next, 0)
-                baseline_targets = np.append(baseline_targets, path["reward"] + v_next_n)
+                baseline_targets = np.append(baseline_targets, path["reward"] + gamma * v_next_n)
+            baseline_targets = normalize(baseline_targets)
             sess.run(baseline_update_op, feed_dict={
                 sy_ob_no: ob_no,
                 sy_baseline_targets_n: baseline_targets,

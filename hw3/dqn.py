@@ -128,6 +128,25 @@ def learn(env,
     ######
     
     # YOUR CODE HERE
+    q_values_t = q_func(obs_t_float, num_actions, scope='q_func', reuse=False)
+    #  q_values_tp1 = q_func(obs_tp1_float, num_actions, scope='q_func', reuse=True)
+    target_q_values_tp1 = q_func(obs_tp1_float, num_actions, scope='target_q_func', reuse=False)
+
+    greedy_action = tf.argmax(q_values_t, axis=1)
+
+    # TODO don't know why can not use action of the next state
+    #  act_tp1 = tf.argmax(q_values_tp1, 1)
+    #  target_q_tp1 = tf.reduce_sum(target_q_values_tp1 * tf.one_hot(act_tp1, num_actions), axis=1)
+    target_q_tp1 = tf.reduce_max(target_q_values_tp1, axis=1)
+    target_q_t = rew_t_ph + (1.0 - done_mask_ph) * gamma * target_q_tp1
+
+    q_t = tf.reduce_sum(q_values_t * tf.one_hot(act_t_ph, num_actions), axis=1)
+
+    total_error = tf.nn.l2_loss(q_t - target_q_t)
+    #  total_error = huber_loss(q_t - target_q_t)
+
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='targe_q_func')
 
     ######
 
@@ -195,6 +214,21 @@ def learn(env,
         #####
         
         # YOUR CODE HERE
+        idx = replay_buffer.store_frame(last_obs)
+
+        if not model_initialized or random.random() < exploration.value(t):
+            action = random.randint(0, num_actions - 1)
+        else:
+            obs_t = replay_buffer.encode_recent_observation()
+            action = session.run(greedy_action, feed_dict={ obs_t_ph: [obs_t] })[0]
+
+        obs, reward, done, _ = env.step(action)
+        replay_buffer.store_effect(idx, action, reward, done)
+
+        if done:
+            last_obs = env.reset()
+        else:
+            last_obs = obs
 
         #####
 
@@ -246,6 +280,29 @@ def learn(env,
             
             # YOUR CODE HERE
 
+            obs_t_batch, act_t_batch, rew_t_batch, obs_tp1_batch, done_mask_batch = replay_buffer.sample(batch_size)
+    
+            if not model_initialized:
+                initialize_interdependent_variables(session, tf.global_variables(), {
+                    obs_t_ph: obs_t_batch,
+                    obs_tp1_ph: obs_tp1_batch,
+                })
+                session.run(update_target_fn)
+                model_initialized = True
+            
+            _total_error, _, __, _ = session.run([total_error, q_t, target_q_t, train_fn], feed_dict={
+                obs_t_ph: obs_t_batch,
+                act_t_ph: act_t_batch,
+                rew_t_ph: rew_t_batch,
+                obs_tp1_ph: obs_tp1_batch,
+                done_mask_ph: done_mask_batch,
+                learning_rate: optimizer_spec.lr_schedule.value(t),
+            })
+            num_param_updates += 1
+
+            if num_param_updates % target_update_freq == 0:
+                session.run(update_target_fn)
+
             #####
 
         ### 4. Log progress
@@ -261,4 +318,5 @@ def learn(env,
             print("episodes %d" % len(episode_rewards))
             print("exploration %f" % exploration.value(t))
             print("learning_rate %f" % optimizer_spec.lr_schedule.value(t))
+            print("total_error %f" % _total_error)
             sys.stdout.flush()

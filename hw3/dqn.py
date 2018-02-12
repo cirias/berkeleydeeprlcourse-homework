@@ -77,6 +77,14 @@ def learn(env,
     assert type(env.observation_space) == gym.spaces.Box
     assert type(env.action_space)      == gym.spaces.Discrete
 
+    print("replay_buffer_size = {0}".format(replay_buffer_size))
+    print("batch_size = {0}".format(batch_size))
+    print("gamma = {0}".format(gamma))
+    print("learning_starts = {0}".format(learning_starts))
+    print("learning_freq = {0}".format(learning_freq))
+    print("frame_history_len = {0}".format(frame_history_len))
+    print("target_update_freq = {0}".format(target_update_freq))
+
     ###############
     # BUILD MODEL #
     ###############
@@ -128,25 +136,19 @@ def learn(env,
     ######
     
     # YOUR CODE HERE
-    q_values_t = q_func(obs_t_float, num_actions, scope='q_func', reuse=False)
-    #  q_values_tp1 = q_func(obs_tp1_float, num_actions, scope='q_func', reuse=True)
-    target_q_values_tp1 = q_func(obs_tp1_float, num_actions, scope='target_q_func', reuse=False)
+    # Q values
+    qs_t = q_func(obs_t_float, num_actions, scope='q_func', reuse=False)
+    q_t = tf.reduce_sum(qs_t * tf.one_hot(act_t_ph, depth=num_actions), axis=1)
+    max_act = tf.argmax(qs_t, axis=1)
 
-    greedy_action = tf.argmax(q_values_t, axis=1)
-
-    # TODO don't know why can not use action of the next state
-    #  act_tp1 = tf.argmax(q_values_tp1, 1)
-    #  target_q_tp1 = tf.reduce_sum(target_q_values_tp1 * tf.one_hot(act_tp1, num_actions), axis=1)
-    target_q_tp1 = tf.reduce_max(target_q_values_tp1, axis=1)
-    target_q_t = rew_t_ph + (1.0 - done_mask_ph) * gamma * target_q_tp1
-
-    q_t = tf.reduce_sum(q_values_t * tf.one_hot(act_t_ph, num_actions), axis=1)
+    # Targets
+    target_qs_tp1 = q_func(obs_tp1_float, num_actions, scope='target_q_func', reuse=False)
+    target_q_t = rew_t_ph + (1.0 - done_mask_ph) * gamma * tf.reduce_max(target_qs_tp1, axis=1)
 
     total_error = tf.nn.l2_loss(q_t - target_q_t)
-    #  total_error = huber_loss(q_t - target_q_t)
 
     q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
-    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='targe_q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_func')
 
     ######
 
@@ -174,7 +176,7 @@ def learn(env,
     mean_episode_reward      = -float('nan')
     best_mean_episode_reward = -float('inf')
     last_obs = env.reset()
-    LOG_EVERY_N_STEPS = 10000
+    LOG_EVERY_N_STEPS = 1000
 
     for t in itertools.count():
         ### 1. Check stopping criterion
@@ -216,11 +218,14 @@ def learn(env,
         # YOUR CODE HERE
         idx = replay_buffer.store_frame(last_obs)
 
-        if not model_initialized or random.random() < exploration.value(t):
+        if not model_initialized:
             action = random.randint(0, num_actions - 1)
         else:
             obs_t = replay_buffer.encode_recent_observation()
-            action = session.run(greedy_action, feed_dict={ obs_t_ph: [obs_t] })[0]
+            action = session.run(max_act, feed_dict={ obs_t_ph: [obs_t] })[0]
+            if random.random() < exploration.value(t):
+                choices = list(set(range(num_actions)) - set([action]))
+                action = random.choice(choices)
 
         obs, reward, done, _ = env.step(action)
         replay_buffer.store_effect(idx, action, reward, done)
@@ -290,7 +295,7 @@ def learn(env,
                 session.run(update_target_fn)
                 model_initialized = True
             
-            _total_error, _, __, _ = session.run([total_error, q_t, target_q_t, train_fn], feed_dict={
+            _total_error, _ = session.run([total_error, train_fn], feed_dict={
                 obs_t_ph: obs_t_batch,
                 act_t_ph: act_t_batch,
                 rew_t_ph: rew_t_batch,
@@ -319,4 +324,5 @@ def learn(env,
             print("exploration %f" % exploration.value(t))
             print("learning_rate %f" % optimizer_spec.lr_schedule.value(t))
             print("total_error %f" % _total_error)
+            print("")
             sys.stdout.flush()

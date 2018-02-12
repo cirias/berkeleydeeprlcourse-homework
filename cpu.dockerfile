@@ -1,4 +1,4 @@
-FROM gcr.io/tensorflow/tensorflow:latest-gpu
+FROM gcr.io/tensorflow/tensorflow:latest
 
 RUN apt update && apt install -y wget
 
@@ -6,7 +6,7 @@ RUN cd /tmp && wget https://bootstrap.pypa.io/get-pip.py && python3 get-pip.py
 
 RUN pip3 install numpy
 RUN pip3 install scipy
-RUN pip3 install tensorflow-gpu
+RUN pip3 install tensorflow
 RUN pip3 install gym==0.7.4
 
 # opencv
